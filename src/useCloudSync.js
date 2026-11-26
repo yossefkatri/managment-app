@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as auth from './google/auth.js'
 import * as drive from './google/drive.js'
+import { mergeTransactions } from './mergeTransactions.js'
 
 const DIRTY_KEY = 'budget-tracker:dirty'
 const SAVE_DELAY_MS = 1500
@@ -92,15 +93,27 @@ export default function useCloudSync(transactions, setTransactions) {
       setError(null)
       setStatus('connecting')
       try {
+        const previousEmail = auth.lastEmail()
         const token = await auth.getToken({ interactive })
         const me = await drive.getUser(token)
+        const accountChanged = Boolean(previousEmail) && previousEmail !== me.emailAddress
         auth.rememberEmail(me.emailAddress)
         setUser(me)
 
         const folderId = await drive.ensureFolder(token)
         const file = await drive.findDataFile(token, folderId)
 
-        if (!file) {
+        if (file && accountChanged && isDirty()) {
+          // A different account signed in while this device still had unsaved changes:
+          // keep everything in the cloud and add only the device's transactions the cloud doesn't have
+          fileId.current = file.id
+          const remote = await drive.readData(token, file.id)
+          const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
+          const { merged, addedCount } = mergeTransactions(remoteTx, latest.current)
+          if (addedCount > 0) await drive.updateData(token, file.id, toPayload(merged))
+          baseline.current = serialize(merged)
+          setTransactions((prev) => [...merged, ...prev.filter((t) => t.demo)])
+        } else if (!file) {
           // First time: create the Drive file from what this device has
           fileId.current = await drive.createData(token, folderId, toPayload(latest.current))
           baseline.current = serialize(latest.current)
