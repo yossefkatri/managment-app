@@ -10,6 +10,8 @@ import {
   XStack,
   YStack,
 } from 'tamagui'
+import TrendChart from './TrendChart.jsx'
+import { createDemoTransactions } from './demoData.js'
 
 const STORAGE_KEY = 'budget-tracker:transactions'
 
@@ -25,7 +27,10 @@ const monthOf = (date) => date.slice(0, 7)
 
 function loadTransactions() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) ?? []
+    const stored = localStorage.getItem(STORAGE_KEY)
+    // First run (nothing saved yet): start with demo data so the chart has something to show
+    if (stored === null) return createDemoTransactions()
+    return JSON.parse(stored) ?? []
   } catch {
     return []
   }
@@ -182,6 +187,12 @@ export default function App() {
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
 
+  const hasDemo = transactions.some((t) => t.demo)
+  const toggleDemo = () =>
+    setTransactions((prev) =>
+      hasDemo ? prev.filter((t) => !t.demo) : [...prev, ...createDemoTransactions()],
+    )
+
   return (
     <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" padding="$4">
       <YStack width="100%" maxWidth={720} gap="$4">
@@ -198,6 +209,23 @@ export default function App() {
           <SummaryCard title="הוצאות" amount={expense} theme="red" />
           <SummaryCard title="יתרה" amount={balance} theme={balance < 0 ? 'red' : 'accent'} />
         </XStack>
+
+        <Card padding="$4" gap="$3" borderWidth={1} borderColor="$border-color">
+          <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$2">
+            <SizableText size="$5" fontWeight="700">
+              מגמה חודשית
+            </SizableText>
+            <Button size="sm" variant="outlined" onPress={toggleDemo}>
+              {hasDemo ? 'הסר נתוני דמה' : 'טען נתוני דמה'}
+            </Button>
+          </XStack>
+          <TrendChart
+            transactions={transactions}
+            currentMonth={monthOf(today())}
+            selectedMonth={month}
+            onSelectMonth={setMonth}
+          />
+        </Card>
 
         <TransactionForm onAdd={addTx} />
 
