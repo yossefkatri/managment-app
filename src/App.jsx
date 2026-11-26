@@ -28,9 +28,8 @@ const monthOf = (date) => date.slice(0, 7)
 function loadTransactions() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    // First run (nothing saved yet): start with demo data so the chart has something to show
-    if (stored === null) return createDemoTransactions()
-    return JSON.parse(stored) ?? []
+    // Demo data is never loaded on startup; it only appears when the user toggles it on
+    return (JSON.parse(stored) ?? []).filter((t) => !t.demo)
   } catch {
     return []
   }
@@ -187,11 +186,13 @@ export default function App() {
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
 
-  const hasDemo = transactions.some((t) => t.demo)
-  const toggleDemo = () =>
+  const [hasDemo, setHasDemo] = useState(false)
+  const toggleDemo = () => {
     setTransactions((prev) =>
       hasDemo ? prev.filter((t) => !t.demo) : [...prev, ...createDemoTransactions()],
     )
+    setHasDemo(!hasDemo)
+  }
 
   return (
     <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" padding="$4">
