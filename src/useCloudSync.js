@@ -89,12 +89,12 @@ export default function useCloudSync(transactions, setTransactions) {
   )
 
   const connect = useCallback(
-    async ({ interactive }) => {
+    async ({ interactive, selectAccount = false }) => {
       setError(null)
       setStatus('connecting')
       try {
         const previousEmail = auth.lastEmail()
-        const token = await auth.getToken({ interactive })
+        const token = await auth.getToken({ interactive, selectAccount })
         const me = await drive.getUser(token)
         const accountChanged = Boolean(previousEmail) && previousEmail !== me.emailAddress
         auth.rememberEmail(me.emailAddress)
@@ -172,6 +172,7 @@ export default function useCloudSync(transactions, setTransactions) {
   }, [upload])
 
   const signIn = useCallback(() => connect({ interactive: true }), [connect])
+  const signInOtherAccount = useCallback(() => connect({ interactive: true, selectAccount: true }), [connect])
 
   /** Saves pending changes, then signs out and clears this device's copy. Returns false if saving failed. */
   const signOut = useCallback(async () => {
@@ -190,5 +191,5 @@ export default function useCloudSync(transactions, setTransactions) {
     return true
   }, [upload, setTransactions])
 
-  return { status, user, error, signIn, signOut, lastEmail: auth.lastEmail(), hasClientId: auth.hasClientId }
+  return { status, user, error, signIn, signInOtherAccount, signOut, lastEmail: auth.lastEmail(), hasClientId: auth.hasClientId }
 }

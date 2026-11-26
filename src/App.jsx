@@ -38,7 +38,13 @@ function LoginScreen({ sync }) {
           <Button theme="accent" disabled={busy} opacity={busy ? 0.6 : 1} onPress={sync.signIn}>
             {busy ? 'מתחבר…' : sync.lastEmail ? `התחבר בתור ${sync.lastEmail}` : 'התחבר עם Google'}
           </Button>
-        ) : (
+        ) : null}
+        {sync.hasClientId && sync.lastEmail && !busy ? (
+          <Button variant="outlined" onPress={sync.signInOtherAccount}>
+            התחבר עם חשבון אחר
+          </Button>
+        ) : null}
+        {sync.hasClientId ? null : (
           <Paragraph theme="red" color="$color-10">
             חסר Client ID של Google. הגדר VITE_GOOGLE_CLIENT_ID בקובץ ‎.env.local והפעל מחדש את השרת.
           </Paragraph>

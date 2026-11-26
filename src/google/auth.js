@@ -67,8 +67,8 @@ export function rememberEmail(email) {
  * - interactive=false: only returns a stored, non-expired token; otherwise throws NeedsLoginError.
  * - interactive=true: opens the Google popup. Must be called from a click/tap.
  */
-export async function getToken({ interactive = false } = {}) {
-  if (hasValidToken()) return readSession().token
+export async function getToken({ interactive = false, selectAccount = false } = {}) {
+  if (hasValidToken() && !selectAccount) return readSession().token
   if (!interactive) throw new NeedsLoginError()
   if (!CLIENT_ID) throw new Error('VITE_GOOGLE_CLIENT_ID is not set')
 
@@ -78,7 +78,7 @@ export async function getToken({ interactive = false } = {}) {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPE,
-      login_hint: previous?.email ?? undefined,
+      login_hint: selectAccount ? undefined : (previous?.email ?? undefined),
       callback: (res) => {
         if (res.error) return reject(new Error(res.error_description || res.error))
         writeSession({
@@ -90,7 +90,8 @@ export async function getToken({ interactive = false } = {}) {
       },
       error_callback: (err) => reject(new Error(err?.message || err?.type || 'Sign-in cancelled')),
     })
-    client.requestAccessToken({ prompt: previous?.email ? '' : 'consent' })
+    const prompt = selectAccount ? 'select_account' : previous?.email ? '' : 'consent'
+    client.requestAccessToken({ prompt })
   })
 }
 
