@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as auth from './google/auth.js'
 import * as drive from './google/drive.js'
+import { mergeTransactions } from './mergeTransactions.js'
 
 // localStorage flag: '1' means this device has changes that haven't reached Drive yet.
 // Stored (not just kept in memory) so it survives a reload or closing the app while offline.
@@ -143,10 +144,19 @@ export default function useCloudSync(transactions, setTransactions) {
           baseline.current = serialize(latest.current)
         } else if (sameAccount && isDirty()) {
           // The same account is back (e.g. its token expired while offline) with changes it made
-          // on this device that never reached Drive: upload them instead of losing them
+          // on this device that never reached Drive: keep everything in the cloud and add only
+          // the device's transactions the cloud doesn't have
           fileId.current = file.id
-          await drive.updateData(token, file.id, toPayload(latest.current))
-          baseline.current = serialize(latest.current)
+          const remote = await drive.readData(token, file.id)
+          const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
+          const { merged, addedCount } = mergeTransactions(remoteTx, latest.current)
+          if (addedCount > 0) await drive.updateData(token, file.id, toPayload(merged))
+          baseline.current = serialize(merged)
+          // Update the ref right away (not only on the next render), so a signOut() that is
+          // waiting on this connect sees the merged list as saved
+          const next = [...merged, ...latest.current.filter((t) => t.demo)]
+          latest.current = next
+          setTransactions(next)
         } else {
           // New device or another account: the cloud data overrides this device's cache
           fileId.current = file.id
