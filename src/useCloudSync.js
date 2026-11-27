@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as auth from './google/auth.js'
 import * as drive from './google/drive.js'
-import { mergeTransactions } from './mergeTransactions.js'
 
 // localStorage flag: '1' means this device has changes that haven't reached Drive yet.
 // Stored (not just kept in memory) so it survives a reload or closing the app while offline.
@@ -82,11 +81,12 @@ export default function useCloudSync(transactions, setTransactions) {
   /**
    * Uploads the current transactions to Drive if they differ from `baseline`.
    * Cancels any pending delayed upload first, and does nothing until connected.
-   * Never opens a sign-in popup: if the token expired, the status becomes 'needs-login'.
+   * If the token expired: with `interactive` (only from a click) it opens the sign-in popup,
+   * otherwise the status becomes 'needs-login'.
    * `keepalive` lets the request finish while the page is being hidden or closed.
    */
   const upload = useCallback(
-    async ({ keepalive = false } = {}) => {
+    async ({ keepalive = false, interactive = false } = {}) => {
       clearTimeout(timer.current)
       if (!fileId.current) return
       const json = serialize(latest.current)
@@ -98,7 +98,7 @@ export default function useCloudSync(transactions, setTransactions) {
       }
       setStatus('saving')
       try {
-        const token = await auth.getToken()
+        const token = await auth.getToken({ interactive })
         await drive.updateData(token, fileId.current, toPayload(latest.current), { keepalive })
         baseline.current = json
         // Only report 'synced' if nothing changed during the upload;
@@ -116,7 +116,7 @@ export default function useCloudSync(transactions, setTransactions) {
 
   /**
    * Signs in (with a popup if `interactive`), finds or creates the Drive file,
-   * and decides whose data wins - see the four cases below.
+   * and decides whose data wins - see the three cases below.
    * `selectAccount` shows Google's account chooser to switch accounts.
    */
   const connect = useCallback(
@@ -128,7 +128,8 @@ export default function useCloudSync(transactions, setTransactions) {
         const previousEmail = auth.lastEmail()
         const token = await auth.getToken({ interactive, selectAccount })
         const me = await drive.getUser(token)
-        const accountChanged = Boolean(previousEmail) && previousEmail !== me.emailAddress
+        // Same account as the last session on this device (false on a new device or another account)
+        const sameAccount = previousEmail === me.emailAddress
         // The token response has no email, so save the real one now
         auth.rememberEmail(me.emailAddress)
         setUser(me)
@@ -136,27 +137,18 @@ export default function useCloudSync(transactions, setTransactions) {
         const folderId = await drive.ensureFolder(token)
         const file = await drive.findDataFile(token, folderId)
 
-        if (file && accountChanged && isDirty()) {
-          // A different account signed in while this device still had unsaved changes:
-          // keep everything in the cloud and add only the device's transactions the cloud doesn't have
-          fileId.current = file.id
-          const remote = await drive.readData(token, file.id)
-          const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
-          const { merged, addedCount } = mergeTransactions(remoteTx, latest.current)
-          if (addedCount > 0) await drive.updateData(token, file.id, toPayload(merged))
-          baseline.current = serialize(merged)
-          setTransactions((prev) => [...merged, ...prev.filter((t) => t.demo)])
-        } else if (!file) {
+        if (!file) {
           // First time: create the Drive file from what this device has
           fileId.current = await drive.createData(token, folderId, toPayload(latest.current))
           baseline.current = serialize(latest.current)
-        } else if (isDirty()) {
-          // Unsaved changes from while we were offline/signed out: this device wins
+        } else if (sameAccount && isDirty()) {
+          // The same account is back (e.g. its token expired while offline) with changes it made
+          // on this device that never reached Drive: upload them instead of losing them
           fileId.current = file.id
           await drive.updateData(token, file.id, toPayload(latest.current))
           baseline.current = serialize(latest.current)
         } else {
-          // Drive is the source of truth
+          // New device or another account: the cloud data overrides this device's cache
           fileId.current = file.id
           const remote = await drive.readData(token, file.id)
           const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
@@ -211,12 +203,23 @@ export default function useCloudSync(transactions, setTransactions) {
   /** "Sign in with another account" handler: shows Google's account chooser. */
   const signInOtherAccount = useCallback(() => connect({ interactive: true, selectAccount: true }), [connect])
 
-  /** Saves pending changes, then signs out and clears this device's copy. Returns false if saving failed. */
+  /**
+   * Uploads any unsaved transactions, then signs out and clears this device's copy.
+   * Returns false (and stays signed in) if the changes could not be uploaded, so nothing is lost.
+   * Called from a click, so it may open the sign-in popup when the token has expired.
+   */
   const signOut = useCallback(async () => {
-    if (fileId.current && serialize(latest.current) !== baseline.current) {
-      await upload()
-      // Still different → the upload failed; don't sign out and lose the changes
-      if (serialize(latest.current) !== baseline.current) return false
+    const hasUnsavedChanges = () => isDirty() || serialize(latest.current) !== baseline.current
+    if (hasUnsavedChanges()) {
+      if (fileId.current) {
+        await upload({ interactive: true })
+      } else {
+        // Not connected to the Drive file (e.g. the startup connect failed):
+        // reconnecting as the same account uploads this device's unsaved changes
+        await connect({ interactive: true })
+      }
+      // Still unsaved → uploading failed; don't sign out and lose the changes
+      if (hasUnsavedChanges()) return false
     }
     clearTimeout(timer.current)
     await auth.signOut()
@@ -227,7 +230,7 @@ export default function useCloudSync(transactions, setTransactions) {
     setTransactions([])
     setStatus('signed-out')
     return true
-  }, [upload, setTransactions])
+  }, [upload, connect, setTransactions])
 
   return { status, user, error, signIn, signInOtherAccount, signOut, lastEmail: auth.lastEmail(), hasClientId: auth.hasClientId }
 }
