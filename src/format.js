@@ -19,3 +19,6 @@ export const monthName = (ym) => monthLongFormat.format(new Date(Number(ym.slice
 
 /** First letter of the user's name (or email), for the avatar circle. */
 export const initialOf = (user) => (user?.displayName || user?.emailAddress || '?').trim().charAt(0).toUpperCase()
+
+/** Keeps only digits and a dot, for amount inputs. */
+export const amountText = (text) => text.replace(/[^\d.]/g, '')

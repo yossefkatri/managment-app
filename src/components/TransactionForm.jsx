@@ -1,16 +1,23 @@
 import { useState } from 'react'
-import { Button, Card, Input, SizableText, XStack } from 'tamagui'
-import { CATEGORIES, today } from '../format.js'
+import { Button, Card, Input, Paragraph, SizableText, XStack } from 'tamagui'
+import { CATEGORIES, amountText, monthOf, today } from '../format.js'
+import { CategoryPicker, TypeToggle } from './FormParts.jsx'
 
-export default function TransactionForm({ onAdd }) {
+/**
+ * New transaction form. With "repeats every month" on, it creates a cyclic rule instead
+ * (`onAddCyclic`): the date's day becomes the day of the month, and its month the first month.
+ */
+export default function TransactionForm({ onAdd, onAddCyclic }) {
   const [type, setType] = useState('expense')
   const [amount, setAmount] = useState('')
   const [description, setDescription] = useState('')
   const [category, setCategory] = useState(CATEGORIES.expense[0])
   const [date, setDate] = useState(today())
+  const [repeat, setRepeat] = useState(false)
 
   const value = Number(amount)
   const valid = value > 0 && date
+  const day = date ? Number(date.slice(8, 10)) : null
 
   const switchType = (next) => {
     setType(next)
@@ -19,14 +26,12 @@ export default function TransactionForm({ onAdd }) {
 
   const submit = () => {
     if (!valid) return
-    onAdd({
-      id: crypto.randomUUID(),
-      type,
-      amount: value,
-      description: description.trim(),
-      category,
-      date,
-    })
+    const common = { id: crypto.randomUUID(), type, amount: value, description: description.trim(), category }
+    if (repeat) {
+      onAddCyclic({ ...common, dayOfMonth: day, startMonth: monthOf(date), endMonth: null })
+    } else {
+      onAdd({ ...common, date })
+    }
     setAmount('')
     setDescription('')
   }
@@ -37,24 +42,7 @@ export default function TransactionForm({ onAdd }) {
         תנועה חדשה
       </SizableText>
 
-      <XStack gap="$2">
-        <Button
-          flex={1}
-          theme={type === 'expense' ? 'red' : undefined}
-          variant={type === 'expense' ? undefined : 'outlined'}
-          onPress={() => switchType('expense')}
-        >
-          הוצאה
-        </Button>
-        <Button
-          flex={1}
-          theme={type === 'income' ? 'green' : undefined}
-          variant={type === 'income' ? undefined : 'outlined'}
-          onPress={() => switchType('income')}
-        >
-          הכנסה
-        </Button>
-      </XStack>
+      <TypeToggle type={type} onChange={switchType} />
 
       <XStack gap="$2" flexWrap="wrap">
         <Input
@@ -63,7 +51,7 @@ export default function TransactionForm({ onAdd }) {
           placeholder="סכום ₪"
           inputMode="decimal"
           value={amount}
-          onChangeText={(text) => setAmount(text.replace(/[^\d.]/g, ''))}
+          onChangeText={(text) => setAmount(amountText(text))}
         />
         <Input flex={1} minWidth={140} type="date" value={date} onChangeText={setDate} />
       </XStack>
@@ -75,22 +63,27 @@ export default function TransactionForm({ onAdd }) {
         onSubmitEditing={submit}
       />
 
-      <XStack gap="$2" flexWrap="wrap">
-        {CATEGORIES[type].map((c) => (
-          <Button
-            key={c}
-            size="sm"
-            theme={c === category ? 'accent' : undefined}
-            variant={c === category ? undefined : 'outlined'}
-            onPress={() => setCategory(c)}
-          >
-            {c}
-          </Button>
-        ))}
+      <CategoryPicker type={type} category={category} onChange={setCategory} />
+
+      <XStack gap="$3" alignItems="center" flexWrap="wrap">
+        <Button
+          size="sm"
+          theme={repeat ? 'accent' : undefined}
+          variant={repeat ? undefined : 'outlined'}
+          aria-pressed={repeat}
+          onPress={() => setRepeat(!repeat)}
+        >
+          {repeat ? '✓ חוזר כל חודש' : '🔁 חוזר כל חודש'}
+        </Button>
+        {repeat && day ? (
+          <Paragraph size="$2" color="$color-10">
+            {`יתווסף אוטומטית בכל ${day} לחודש, החל מהחודש של התאריך שנבחר`}
+          </Paragraph>
+        ) : null}
       </XStack>
 
       <Button theme="accent" disabled={!valid} opacity={valid ? 1 : 0.5} onPress={submit}>
-        הוסף
+        {repeat ? 'הוסף תנועה קבועה' : 'הוסף'}
       </Button>
     </Card>
   )

@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, H1, ScrollView, XStack, YStack, useMedia } from 'tamagui'
 import LoginScreen from './components/LoginScreen.jsx'
 import Sidebar from './components/Sidebar.jsx'
+import { expandCyclic, firstCyclicMonth } from './cyclic.js'
 import { createDemoTransactions } from './demoData.js'
 import { monthOf, today } from './format.js'
 import DashboardPage from './pages/DashboardPage.jsx'
@@ -40,7 +41,7 @@ function pageFromHash() {
 
 export default function App() {
   const [data, setData] = useState(loadData)
-  const { transactions } = data
+  const { transactions, cyclic } = data
   const [month, setMonth] = useState(monthOf(today()))
   const [page, setPage] = useState(pageFromHash)
   // Phones: the sidebar is a drawer opened from the top bar
@@ -50,6 +51,18 @@ export default function App() {
 
   /** Updates only the transactions list (`update` receives the previous list). */
   const setTransactions = (update) => setData((prev) => ({ ...prev, transactions: update(prev.transactions) }))
+  /** Updates only the cyclic rules (`update` receives the previous list). */
+  const setCyclic = (update) => setData((prev) => ({ ...prev, cyclic: update(prev.cyclic) }))
+
+  // The cyclic rules' occurrences are generated here, only for display - they are never stored.
+  // They run from the first rule's start month up to this month, or to the selected month when
+  // the user looks ahead, so a future month already shows its expected fixed incomes and expenses.
+  const currentMonth = monthOf(today())
+  const lastMonth = month > currentMonth ? month : currentMonth
+  const displayedTransactions = useMemo(() => {
+    const from = firstCyclicMonth(cyclic)
+    return from ? [...transactions, ...expandCyclic(cyclic, from, lastMonth)] : transactions
+  }, [transactions, cyclic, lastMonth])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data.transactions))
@@ -71,6 +84,7 @@ export default function App() {
 
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
+  const addCyclic = (rule) => setCyclic((prev) => [...prev, rule])
 
   const [hasDemo, setHasDemo] = useState(false)
   const toggleDemo = () => {
@@ -94,11 +108,13 @@ export default function App() {
       />
     ) : (
       <DashboardPage
-        transactions={transactions}
+        transactions={displayedTransactions}
         month={month}
         onMonthChange={setMonth}
         onAdd={addTx}
+        onAddCyclic={addCyclic}
         onDelete={deleteTx}
+        onManageCyclic={() => navigate('cyclic')}
         hasDemo={hasDemo}
         onToggleDemo={toggleDemo}
       />

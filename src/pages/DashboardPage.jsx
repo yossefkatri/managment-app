@@ -6,8 +6,21 @@ import TransactionForm from '../components/TransactionForm.jsx'
 import TransactionRow from '../components/TransactionRow.jsx'
 import { monthOf, today } from '../format.js'
 
-/** The selected month: totals, the trend chart, a form for a new transaction, and the month's list. */
-export default function DashboardPage({ transactions, month, onMonthChange, onAdd, onDelete, hasDemo, onToggleDemo }) {
+/**
+ * The selected month: totals, the trend chart, a form for a new transaction, and the month's list.
+ * `transactions` already includes the occurrences generated from the cyclic rules.
+ */
+export default function DashboardPage({
+  transactions,
+  month,
+  onMonthChange,
+  onAdd,
+  onAddCyclic,
+  onDelete,
+  onManageCyclic,
+  hasDemo,
+  onToggleDemo,
+}) {
   const monthTx = useMemo(
     () =>
       transactions
@@ -50,7 +63,7 @@ export default function DashboardPage({ transactions, month, onMonthChange, onAd
         />
       </Card>
 
-      <TransactionForm onAdd={onAdd} />
+      <TransactionForm onAdd={onAdd} onAddCyclic={onAddCyclic} />
 
       <Card padding="$4" borderWidth={1} borderColor="$border-color">
         <SizableText size="$5" fontWeight="700" marginBottom="$2">
@@ -62,7 +75,7 @@ export default function DashboardPage({ transactions, month, onMonthChange, onAd
           monthTx.map((tx, i) => (
             <YStack key={tx.id}>
               {i > 0 && <Separator />}
-              <TransactionRow tx={tx} onDelete={onDelete} />
+              <TransactionRow tx={tx} onDelete={onDelete} onManageCyclic={onManageCyclic} />
             </YStack>
           ))
         )}
