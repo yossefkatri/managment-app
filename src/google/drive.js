@@ -1,8 +1,9 @@
 // Minimal Google Drive REST v3 client for one JSON file inside one app folder.
 import { NeedsLoginError, dropToken } from './auth.js'
 
-const API = 'https://www.googleapis.com/drive/v3'
-const UPLOAD = 'https://www.googleapis.com/upload/drive/v3'
+const DRIVE_API_URL = 'https://www.googleapis.com/drive/v3'
+const DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3'
+const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 
 export const FOLDER_NAME = 'Budget Tracker'
 export const FILE_NAME = 'budget-data.json'
@@ -14,32 +15,32 @@ export const FILE_NAME = 'budget-data.json'
  *   so the UI can ask the user to sign in again.
  * - On any other non-2xx status: throws an Error with the status and the first 200 chars of the body.
  */
-async function call(token, url, options = {}) {
-  const res = await fetch(url, {
+async function driveRequest(token, url, options = {}) {
+  const response = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${token}`, ...options.headers },
   })
-  if (res.status === 401) {
+  if (response.status === 401) {
     dropToken()
     throw new NeedsLoginError()
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`Drive ${res.status}: ${text.slice(0, 200)}`)
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '')
+    throw new Error(`Drive ${response.status}: ${errorBody.slice(0, 200)}`)
   }
-  return res
+  return response
 }
 
 /** URL-encodes a Drive search query for use in the `q=` parameter. */
-const q = (query) => encodeURIComponent(query)
+const encodeQuery = (searchQuery) => encodeURIComponent(searchQuery)
 
 /**
  * Returns the signed-in Google account: `{ emailAddress, displayName }`.
  * Needed because the GIS token response does not include the user's email.
  */
 export async function getUser(token) {
-  const res = await call(token, `${API}/about?fields=user(emailAddress,displayName)`)
-  return (await res.json()).user
+  const response = await driveRequest(token, `${DRIVE_API_URL}/about?fields=user(emailAddress,displayName)`)
+  return (await response.json()).user
 }
 
 /**
@@ -48,17 +49,20 @@ export async function getUser(token) {
  * so a user's own folder with the same name is never picked up.
  */
 export async function ensureFolder(token) {
-  const query = `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
-  const res = await call(token, `${API}/files?q=${q(query)}&fields=files(id)&spaces=drive`)
-  const { files } = await res.json()
-  if (files.length) return files[0].id
+  const folderQuery = `name='${FOLDER_NAME}' and mimeType='${FOLDER_MIME_TYPE}' and trashed=false`
+  const searchResponse = await driveRequest(
+    token,
+    `${DRIVE_API_URL}/files?q=${encodeQuery(folderQuery)}&fields=files(id)&spaces=drive`,
+  )
+  const { files: matchingFolders } = await searchResponse.json()
+  if (matchingFolders.length) return matchingFolders[0].id
 
-  const created = await call(token, `${API}/files?fields=id`, {
+  const createResponse = await driveRequest(token, `${DRIVE_API_URL}/files?fields=id`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+    body: JSON.stringify({ name: FOLDER_NAME, mimeType: FOLDER_MIME_TYPE }),
   })
-  return (await created.json()).id
+  return (await createResponse.json()).id
 }
 
 /**
@@ -67,16 +71,19 @@ export async function ensureFolder(token) {
  * Files in the trash are ignored.
  */
 export async function findDataFile(token, folderId) {
-  const query = `name='${FILE_NAME}' and '${folderId}' in parents and trashed=false`
-  const res = await call(token, `${API}/files?q=${q(query)}&fields=files(id,modifiedTime)&spaces=drive`)
-  const { files } = await res.json()
-  return files[0] ?? null
+  const fileQuery = `name='${FILE_NAME}' and '${folderId}' in parents and trashed=false`
+  const searchResponse = await driveRequest(
+    token,
+    `${DRIVE_API_URL}/files?q=${encodeQuery(fileQuery)}&fields=files(id,modifiedTime)&spaces=drive`,
+  )
+  const { files: matchingFiles } = await searchResponse.json()
+  return matchingFiles[0] ?? null
 }
 
 /** Downloads the file's content (`alt=media`) and parses it as JSON. */
 export async function readData(token, fileId) {
-  const res = await call(token, `${API}/files/${fileId}?alt=media`)
-  return res.json()
+  const response = await driveRequest(token, `${DRIVE_API_URL}/files/${fileId}?alt=media`)
+  return response.json()
 }
 
 /**
@@ -86,18 +93,19 @@ export async function readData(token, fileId) {
  */
 export async function createData(token, folderId, data) {
   const boundary = `budget-${crypto.randomUUID()}`
-  const body =
+  const fileMetadata = { name: FILE_NAME, parents: [folderId], mimeType: 'application/json' }
+  const multipartBody =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-    JSON.stringify({ name: FILE_NAME, parents: [folderId], mimeType: 'application/json' }) +
+    JSON.stringify(fileMetadata) +
     `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
     JSON.stringify(data, null, 2) +
     `\r\n--${boundary}--`
-  const res = await call(token, `${UPLOAD}/files?uploadType=multipart&fields=id`, {
+  const response = await driveRequest(token, `${DRIVE_UPLOAD_URL}/files?uploadType=multipart&fields=id`, {
     method: 'POST',
     headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-    body,
+    body: multipartBody,
   })
-  return (await res.json()).id
+  return (await response.json()).id
 }
 
 /**
@@ -106,7 +114,7 @@ export async function createData(token, folderId, data) {
  * e.g. when saving on tab close. Browsers limit keepalive bodies to about 64 KB.
  */
 export async function updateData(token, fileId, data, { keepalive = false } = {}) {
-  await call(token, `${UPLOAD}/files/${fileId}?uploadType=media&fields=id`, {
+  await driveRequest(token, `${DRIVE_UPLOAD_URL}/files/${fileId}?uploadType=media&fields=id`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data, null, 2),

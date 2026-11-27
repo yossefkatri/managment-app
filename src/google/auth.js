@@ -2,9 +2,12 @@
 // Scope `drive.file` only lets the app see files it created itself - never the rest of the Drive.
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
-const SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+const GIS_SCRIPT_URL = 'https://accounts.google.com/gsi/client'
 // localStorage key holding the session: { token, expiresAt, email }
 const SESSION_KEY = 'budget-tracker:session'
+// A token this close to expiring is treated as expired, so it can't run out mid-request.
+const TOKEN_EXPIRY_MARGIN_MS = 60_000
 
 /**
  * Thrown when there is no usable token and the user has to sign in (via a click).
@@ -20,26 +23,26 @@ export class NeedsLoginError extends Error {
 /** True when VITE_GOOGLE_CLIENT_ID is configured, i.e. Google sync can be offered at all. */
 export const hasClientId = Boolean(CLIENT_ID)
 
-let gisPromise
+let gisLoadPromise
 /**
  * Loads the Google Identity Services script once and resolves when it's ready.
  * Later calls reuse the same promise. If loading fails, the promise is cleared
  * so the next call can try again.
  */
 function loadGis() {
-  gisPromise ??= new Promise((resolve, reject) => {
+  gisLoadPromise ??= new Promise((resolve, reject) => {
     if (window.google?.accounts?.oauth2) return resolve()
-    const script = document.createElement('script')
-    script.src = 'https://accounts.google.com/gsi/client'
-    script.async = true
-    script.onload = () => resolve()
-    script.onerror = () => {
-      gisPromise = undefined
+    const gisScript = document.createElement('script')
+    gisScript.src = GIS_SCRIPT_URL
+    gisScript.async = true
+    gisScript.onload = () => resolve()
+    gisScript.onerror = () => {
+      gisLoadPromise = undefined
       reject(new Error('Failed to load Google sign-in'))
     }
-    document.head.appendChild(script)
+    document.head.appendChild(gisScript)
   })
-  return gisPromise
+  return gisLoadPromise
 }
 
 /** Reads the stored session from localStorage. Returns null if missing, unreadable or storage is blocked. */
@@ -66,8 +69,8 @@ export const lastEmail = () => readSession()?.email ?? null
 
 /** True when a non-expired access token is stored, so we can reconnect without a popup. */
 export function hasValidToken() {
-  const s = readSession()
-  return Boolean(s?.token && s.expiresAt - Date.now() > 60_000)
+  const session = readSession()
+  return Boolean(session?.token && session.expiresAt - Date.now() > TOKEN_EXPIRY_MARGIN_MS)
 }
 
 /**
@@ -76,8 +79,8 @@ export function hasValidToken() {
  * Does nothing if there is no session.
  */
 export function rememberEmail(email) {
-  const s = readSession()
-  if (s) writeSession({ ...s, email })
+  const session = readSession()
+  if (session) writeSession({ ...session, email })
 }
 
 /**
@@ -95,38 +98,41 @@ export async function getToken({ interactive = false, selectAccount = false } = 
 
   await loadGis()
   // Snapshot of the session before the popup - the callback below overwrites it.
-  const previous = readSession()
+  const previousSession = readSession()
   return new Promise((resolve, reject) => {
     // Builds the client with our settings; no popup or network request yet.
-    const client = window.google.accounts.oauth2.initTokenClient({
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
-      scope: SCOPE,
+      scope: DRIVE_FILE_SCOPE,
       // Pre-selects the last account, unless the user asked to pick another one.
-      login_hint: selectAccount ? undefined : (previous?.email ?? undefined),
+      login_hint: selectAccount ? undefined : (previousSession?.email ?? undefined),
       // Called with Google's response: a token, or an OAuth error such as access_denied.
-      callback: (res) => {
-        if (res.error) return reject(new Error(res.error_description || res.error))
+      callback: (tokenResponse) => {
+        if (tokenResponse.error) {
+          return reject(new Error(tokenResponse.error_description || tokenResponse.error))
+        }
         writeSession({
-          token: res.access_token,
-          expiresAt: Date.now() + Number(res.expires_in) * 1000,
-          email: previous?.email ?? null,
+          token: tokenResponse.access_token,
+          expiresAt: Date.now() + Number(tokenResponse.expires_in) * 1000,
+          email: previousSession?.email ?? null,
         })
-        resolve(res.access_token)
+        resolve(tokenResponse.access_token)
       },
       // Called when the flow fails before Google answers (popup blocked or closed).
-      error_callback: (err) => reject(new Error(err?.message || err?.type || 'Sign-in cancelled')),
+      error_callback: (popupError) =>
+        reject(new Error(popupError?.message || popupError?.type || 'Sign-in cancelled')),
     })
     // Account chooser to switch accounts; no prompt for a returning user; full consent the first time.
-    const prompt = selectAccount ? 'select_account' : previous?.email ? '' : 'consent'
+    const promptMode = selectAccount ? 'select_account' : previousSession?.email ? '' : 'consent'
     // Opens the popup. The result arrives in `callback` / `error_callback` above.
-    client.requestAccessToken({ prompt })
+    tokenClient.requestAccessToken({ prompt: promptMode })
   })
 }
 
 /** Forget the stored token (call on 401 so the next attempt asks for a new one). */
 export function dropToken() {
-  const s = readSession()
-  if (s) writeSession({ email: s.email })
+  const session = readSession()
+  if (session) writeSession({ email: session.email })
 }
 
 /**
@@ -134,9 +140,9 @@ export function dropToken() {
  * so it can't be used anymore even if it was copied somewhere.
  */
 export async function signOut() {
-  const s = readSession()
+  const session = readSession()
   writeSession(null)
-  if (s?.token && window.google?.accounts?.oauth2) {
-    window.google.accounts.oauth2.revoke(s.token, () => {})
+  if (session?.token && window.google?.accounts?.oauth2) {
+    window.google.accounts.oauth2.revoke(session.token, () => {})
   }
 }
