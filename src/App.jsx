@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Card,
@@ -59,14 +59,75 @@ function LoginScreen({ sync }) {
   )
 }
 
+// Shown when sign-out is blocked because the unsaved changes could not be uploaded
+const SIGN_OUT_FAILED = {
+  offline: {
+    title: 'אין חיבור לאינטרנט',
+    message:
+      'לא הצלחתי לשמור את השינויים האחרונים ל-Google Drive, ולכן לא התנתקת. השינויים שמורים במכשיר – נסה להתנתק שוב כשהחיבור יחזור.',
+  },
+  'needs-login': {
+    title: 'ההתחברות ל-Google לא הושלמה',
+    message: 'השינויים האחרונים לא נשמרו ל-Drive, ולכן לא התנתקת. נסה שוב.',
+  },
+  error: {
+    title: 'שגיאה בשמירה ל-Drive',
+    message: 'השינויים האחרונים לא נשמרו, ולכן לא התנתקת. נסה שוב.',
+  },
+}
+const NOTIFICATION_DURATION_MS = 8000
+
+/** A notification that pops up at the top of the screen and hides itself after a few seconds. */
+function Notification({ notice, onClose }) {
+  useEffect(() => {
+    const hideTimer = setTimeout(onClose, NOTIFICATION_DURATION_MS)
+    return () => clearTimeout(hideTimer)
+  }, [notice, onClose])
+
+  return (
+    <Card
+      role="alert"
+      theme="red"
+      position="fixed"
+      top="$4"
+      left="$4"
+      right="$4"
+      marginHorizontal="auto"
+      maxWidth={480}
+      zIndex={1000}
+      padding="$4"
+      borderWidth={1}
+      borderColor="$border-color"
+      elevation="$4"
+    >
+      <XStack gap="$3" alignItems="flex-start">
+        <YStack flex={1} gap="$1">
+          <SizableText size="$4" fontWeight="700">
+            {notice.title}
+          </SizableText>
+          <Paragraph size="$3" color="$color-10">
+            {notice.message}
+          </Paragraph>
+        </YStack>
+        <Button size="sm" chromeless onPress={onClose} aria-label="סגור">
+          ✕
+        </Button>
+      </XStack>
+    </Card>
+  )
+}
+
 function SyncBar({ sync }) {
   const warn = ['offline', 'needs-login', 'error'].includes(sync.status)
+  const [notice, setNotice] = useState(null)
+  const closeNotice = useCallback(() => setNotice(null), [])
   const onSignOut = async () => {
-    const ok = await sync.signOut()
-    if (!ok) alert('לא הצלחתי לשמור את השינויים האחרונים ל-Drive, ולכן לא התנתקתי. נסה שוב כשיש חיבור.')
+    const result = await sync.signOut()
+    if (!result.ok) setNotice(SIGN_OUT_FAILED[result.reason] ?? SIGN_OUT_FAILED.error)
   }
   return (
     <XStack alignItems="center" gap="$2" flexWrap="wrap">
+      {notice && <Notification notice={notice} onClose={closeNotice} />}
       <SizableText size="$2" flex={1} theme={warn ? 'red' : undefined} color="$color-10">
         {SYNC_LABELS[sync.status]}
         {sync.status === 'error' && sync.error ? ` (${sync.error})` : ''}
@@ -109,7 +170,7 @@ function loadTransactions() {
 function SummaryCard({ title, amount, theme }) {
   return (
     <Card theme={theme} flex={1} minWidth={150} padding="$4" borderWidth={1} borderColor="$border-color">
-      <SizableText size="$3" color="$color-11">
+      <SizableText size="$3" color="$color-10">
         {title}
       </SizableText>
       <SizableText size="$7" fontWeight="700">

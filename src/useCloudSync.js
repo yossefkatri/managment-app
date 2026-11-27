@@ -65,18 +65,21 @@ export default function useCloudSync(transactions, setTransactions) {
   latest.current = transactions
 
   /**
-   * Turns an error into a status:
+   * Turns an error into a status, sets it, and returns it:
    * sign-in needed → 'needs-login', no network → 'offline', anything else → 'error' with its message.
    */
   const fail = useCallback((err) => {
+    let failedStatus
     if (err instanceof auth.NeedsLoginError) {
-      setStatus('needs-login')
+      failedStatus = 'needs-login'
     } else if (!navigator.onLine || err instanceof TypeError) {
-      setStatus('offline') // fetch throws TypeError on network failure
+      failedStatus = 'offline' // fetch throws TypeError on network failure
     } else {
       setError(err.message)
-      setStatus('error')
+      failedStatus = 'error'
     }
+    setStatus(failedStatus)
+    return failedStatus
   }, [])
 
   /**
@@ -85,6 +88,7 @@ export default function useCloudSync(transactions, setTransactions) {
    * If the token expired: with `interactive` (only from a click) it opens the sign-in popup,
    * otherwise the status becomes 'needs-login'.
    * `keepalive` lets the request finish while the page is being hidden or closed.
+   * Returns the failure status ('offline' | 'needs-login' | 'error') if it failed, otherwise undefined.
    */
   const upload = useCallback(
     async ({ keepalive = false, interactive = false } = {}) => {
@@ -109,7 +113,7 @@ export default function useCloudSync(transactions, setTransactions) {
           setStatus('synced')
         }
       } catch (err) {
-        fail(err)
+        return fail(err)
       }
     },
     [fail],
@@ -119,6 +123,7 @@ export default function useCloudSync(transactions, setTransactions) {
    * Signs in (with a popup if `interactive`), finds or creates the Drive file,
    * and decides whose data wins - see the three cases below.
    * `selectAccount` shows Google's account chooser to switch accounts.
+   * Returns the failure status if it failed, otherwise undefined.
    */
   const connect = useCallback(
     async ({ interactive, selectAccount = false }) => {
@@ -171,8 +176,11 @@ export default function useCloudSync(transactions, setTransactions) {
       } catch (err) {
         fileId.current = null
         // No usable token (and no popup allowed): just show the signed-out state, not an error
-        if (err instanceof auth.NeedsLoginError) setStatus('signed-out')
-        else fail(err)
+        if (err instanceof auth.NeedsLoginError) {
+          setStatus('signed-out')
+          return 'signed-out'
+        }
+        return fail(err)
       }
     },
     [fail, setTransactions],
@@ -215,21 +223,23 @@ export default function useCloudSync(transactions, setTransactions) {
 
   /**
    * Uploads any unsaved transactions, then signs out and clears this device's copy.
-   * Returns false (and stays signed in) if the changes could not be uploaded, so nothing is lost.
    * Called from a click, so it may open the sign-in popup when the token has expired.
+   * Returns { ok: true } when signed out, or { ok: false, reason } when the changes could not be
+   * uploaded (the user stays signed in, so nothing is lost). `reason` is 'offline' for a
+   * connection failure, otherwise 'needs-login' or 'error'.
    */
   const signOut = useCallback(async () => {
     const hasUnsavedChanges = () => isDirty() || serialize(latest.current) !== baseline.current
     if (hasUnsavedChanges()) {
-      if (fileId.current) {
-        await upload({ interactive: true })
-      } else {
-        // Not connected to the Drive file (e.g. the startup connect failed):
-        // reconnecting as the same account uploads this device's unsaved changes
-        await connect({ interactive: true })
-      }
+      const failedStatus = fileId.current
+        ? await upload({ interactive: true })
+        : // Not connected to the Drive file (e.g. the startup connect failed):
+          // reconnecting as the same account uploads this device's unsaved changes
+          await connect({ interactive: true })
       // Still unsaved → uploading failed; don't sign out and lose the changes
-      if (hasUnsavedChanges()) return false
+      if (hasUnsavedChanges()) {
+        return { ok: false, reason: failedStatus ?? 'error' }
+      }
     }
     clearTimeout(timer.current)
     await auth.signOut()
@@ -239,7 +249,7 @@ export default function useCloudSync(transactions, setTransactions) {
     setUser(null)
     setTransactions([])
     setStatus('signed-out')
-    return true
+    return { ok: true }
   }, [upload, connect, setTransactions])
 
   return { status, user, error, signIn, signInOtherAccount, signOut, lastEmail: auth.lastEmail(), hasClientId: auth.hasClientId }
