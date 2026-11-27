@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar.jsx'
 import { expandCyclic, firstCyclicMonth } from './cyclic.js'
 import { createDemoTransactions } from './demoData.js'
 import { monthOf, today } from './format.js'
+import CyclicPage from './pages/CyclicPage.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import ProfilePage from './pages/ProfilePage.jsx'
 import { PAGES } from './pages.js'
@@ -85,6 +86,8 @@ export default function App() {
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
   const addCyclic = (rule) => setCyclic((prev) => [...prev, rule])
+  const updateCyclic = (rule) => setCyclic((prev) => prev.map((r) => (r.id === rule.id ? rule : r)))
+  const deleteCyclic = (id) => setCyclic((prev) => prev.filter((r) => r.id !== id))
 
   const [hasDemo, setHasDemo] = useState(false)
   const toggleDemo = () => {
@@ -104,8 +107,10 @@ export default function App() {
       <ProfilePage
         sync={sync}
         transactionCount={transactions.filter((t) => !t.demo).length}
-        cyclicCount={data.cyclic.length}
+        cyclicCount={cyclic.length}
       />
+    ) : page === 'cyclic' ? (
+      <CyclicPage rules={cyclic} onAdd={addCyclic} onUpdate={updateCyclic} onDelete={deleteCyclic} />
     ) : (
       <DashboardPage
         transactions={displayedTransactions}
