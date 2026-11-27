@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   Card,
@@ -12,6 +12,138 @@ import {
 } from 'tamagui'
 import TrendChart from './TrendChart.jsx'
 import { createDemoTransactions } from './demoData.js'
+import useCloudSync from './useCloudSync.js'
+
+const SYNC_LABELS = {
+  connecting: 'מתחבר ל-Drive…',
+  synced: '✓ נשמר ב-Google Drive',
+  saving: 'שומר…',
+  offline: 'אין חיבור לרשת – השינויים יישמרו כשהחיבור יחזור',
+  'needs-login': 'פג תוקף ההתחברות – השינויים שמורים במכשיר',
+  error: 'שגיאה בשמירה ל-Drive',
+}
+
+function LoginScreen({ sync }) {
+  const busy = sync.status === 'connecting'
+  return (
+    <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" justifyContent="center" padding="$4">
+      <Card width="100%" maxWidth={400} padding="$5" gap="$4" borderWidth={1} borderColor="$border-color">
+        <YStack gap="$1">
+          <H1 size="$9">הכסף שלי</H1>
+          <Paragraph color="$color-10">
+            התחבר עם חשבון Google כדי לשמור את הנתונים בתיקייה "Budget Tracker" ב-Google Drive שלך.
+          </Paragraph>
+        </YStack>
+        {sync.hasClientId ? (
+          <Button theme="accent" disabled={busy} opacity={busy ? 0.6 : 1} onPress={sync.signIn}>
+            {busy ? 'מתחבר…' : sync.lastEmail ? `התחבר בתור ${sync.lastEmail}` : 'התחבר עם Google'}
+          </Button>
+        ) : null}
+        {sync.hasClientId && sync.lastEmail && !busy ? (
+          <Button variant="outlined" onPress={sync.signInOtherAccount}>
+            התחבר עם חשבון אחר
+          </Button>
+        ) : null}
+        {sync.hasClientId ? null : (
+          <Paragraph theme="red" color="$color-10">
+            חסר Client ID של Google. הגדר VITE_GOOGLE_CLIENT_ID בקובץ ‎.env.local והפעל מחדש את השרת.
+          </Paragraph>
+        )}
+        {sync.error && (
+          <Paragraph theme="red" color="$color-10" size="$2">
+            {sync.error}
+          </Paragraph>
+        )}
+      </Card>
+    </YStack>
+  )
+}
+
+// Shown when sign-out is blocked because the unsaved changes could not be uploaded
+const SIGN_OUT_FAILED = {
+  offline: {
+    title: 'אין חיבור לאינטרנט',
+    message:
+      'לא הצלחתי לשמור את השינויים האחרונים ל-Google Drive, ולכן לא התנתקת. השינויים שמורים במכשיר – נסה להתנתק שוב כשהחיבור יחזור.',
+  },
+  'needs-login': {
+    title: 'ההתחברות ל-Google לא הושלמה',
+    message: 'השינויים האחרונים לא נשמרו ל-Drive, ולכן לא התנתקת. נסה שוב.',
+  },
+  error: {
+    title: 'שגיאה בשמירה ל-Drive',
+    message: 'השינויים האחרונים לא נשמרו, ולכן לא התנתקת. נסה שוב.',
+  },
+}
+const NOTIFICATION_DURATION_MS = 8000
+
+/** A notification that pops up at the top of the screen and hides itself after a few seconds. */
+function Notification({ notice, onClose }) {
+  useEffect(() => {
+    const hideTimer = setTimeout(onClose, NOTIFICATION_DURATION_MS)
+    return () => clearTimeout(hideTimer)
+  }, [notice, onClose])
+
+  return (
+    <Card
+      role="alert"
+      theme="red"
+      position="fixed"
+      top="$4"
+      left="$4"
+      right="$4"
+      marginHorizontal="auto"
+      maxWidth={480}
+      zIndex={1000}
+      padding="$4"
+      borderWidth={1}
+      borderColor="$border-color"
+      elevation="$4"
+    >
+      <XStack gap="$3" alignItems="flex-start">
+        <YStack flex={1} gap="$1">
+          <SizableText size="$4" fontWeight="700">
+            {notice.title}
+          </SizableText>
+          <Paragraph size="$3" color="$color-10">
+            {notice.message}
+          </Paragraph>
+        </YStack>
+        <Button size="sm" chromeless onPress={onClose} aria-label="סגור">
+          ✕
+        </Button>
+      </XStack>
+    </Card>
+  )
+}
+
+function SyncBar({ sync }) {
+  const warn = ['offline', 'needs-login', 'error'].includes(sync.status)
+  const [notice, setNotice] = useState(null)
+  const closeNotice = useCallback(() => setNotice(null), [])
+  const onSignOut = async () => {
+    const result = await sync.signOut()
+    if (!result.ok) setNotice(SIGN_OUT_FAILED[result.reason] ?? SIGN_OUT_FAILED.error)
+  }
+  return (
+    <XStack alignItems="center" gap="$2" flexWrap="wrap">
+      {notice && <Notification notice={notice} onClose={closeNotice} />}
+      <SizableText size="$2" flex={1} theme={warn ? 'red' : undefined} color="$color-10">
+        {SYNC_LABELS[sync.status]}
+        {sync.status === 'error' && sync.error ? ` (${sync.error})` : ''}
+        {sync.user?.emailAddress ? ` · ${sync.user.emailAddress}` : ''}
+      </SizableText>
+      {sync.status === 'needs-login' && (
+        <Button size="sm" theme="accent" onPress={sync.signIn}>
+          התחבר מחדש
+        </Button>
+      )}
+      <Button size="sm" variant="outlined" onPress={onSignOut}>
+        התנתק
+      </Button>
+    </XStack>
+  )
+}
 
 const STORAGE_KEY = 'budget-tracker:transactions'
 
@@ -38,7 +170,7 @@ function loadTransactions() {
 function SummaryCard({ title, amount, theme }) {
   return (
     <Card theme={theme} flex={1} minWidth={150} padding="$4" borderWidth={1} borderColor="$border-color">
-      <SizableText size="$3" color="$color-11">
+      <SizableText size="$3" color="$color-10">
         {title}
       </SizableText>
       <SizableText size="$7" fontWeight="700">
@@ -194,9 +326,15 @@ export default function App() {
     setHasDemo(!hasDemo)
   }
 
+  const sync = useCloudSync(transactions, setTransactions)
+  if (sync.status === 'signed-out' || (sync.status === 'connecting' && !sync.user)) {
+    return <LoginScreen sync={sync} />
+  }
+
   return (
     <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" padding="$4">
       <YStack width="100%" maxWidth={720} gap="$4">
+        <SyncBar sync={sync} />
         <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$3">
           <YStack>
             <H1 size="$9">הכסף שלי</H1>
