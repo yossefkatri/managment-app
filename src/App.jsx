@@ -146,6 +146,8 @@ function SyncBar({ sync }) {
 }
 
 const STORAGE_KEY = 'budget-tracker:transactions'
+// Only the cyclic rules are stored; their monthly occurrences are generated when displayed
+const CYCLIC_STORAGE_KEY = 'budget-tracker:cyclic'
 
 const CATEGORIES = {
   income: ['משכורת', 'עבודה נוספת', 'מתנה', 'אחר'],
@@ -157,13 +159,22 @@ const money = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS
 const today = () => new Date().toISOString().slice(0, 10)
 const monthOf = (date) => date.slice(0, 7)
 
-function loadTransactions() {
+/** Reads a JSON array from localStorage; [] when missing, unreadable or storage is blocked. */
+function loadList(key) {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    // Demo data is never loaded on startup; it only appears when the user toggles it on
-    return (JSON.parse(stored) ?? []).filter((t) => !t.demo)
+    const list = JSON.parse(localStorage.getItem(key))
+    return Array.isArray(list) ? list : []
   } catch {
     return []
+  }
+}
+
+/** This device's copy of the data: { transactions, cyclic }. */
+function loadData() {
+  return {
+    // Demo data is never loaded on startup; it only appears when the user toggles it on
+    transactions: loadList(STORAGE_KEY).filter((t) => !t.demo),
+    cyclic: loadList(CYCLIC_STORAGE_KEY),
   }
 }
 
@@ -296,12 +307,17 @@ function TransactionRow({ tx, onDelete }) {
 }
 
 export default function App() {
-  const [transactions, setTransactions] = useState(loadTransactions)
+  const [data, setData] = useState(loadData)
+  const { transactions } = data
   const [month, setMonth] = useState(monthOf(today()))
 
+  /** Updates only the transactions list (`update` receives the previous list). */
+  const setTransactions = (update) => setData((prev) => ({ ...prev, transactions: update(prev.transactions) }))
+
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions))
-  }, [transactions])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data.transactions))
+    localStorage.setItem(CYCLIC_STORAGE_KEY, JSON.stringify(data.cyclic))
+  }, [data])
 
   const monthTx = useMemo(
     () =>
@@ -326,7 +342,7 @@ export default function App() {
     setHasDemo(!hasDemo)
   }
 
-  const sync = useCloudSync(transactions, setTransactions)
+  const sync = useCloudSync(data, setData)
   if (sync.status === 'signed-out' || (sync.status === 'connecting' && !sync.user)) {
     return <LoginScreen sync={sync} />
   }

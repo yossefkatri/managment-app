@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as auth from './google/auth.js'
 import * as drive from './google/drive.js'
+import { mergeCyclic } from './cyclic.js'
 import { mergeTransactions } from './mergeTransactions.js'
 
 // localStorage flag: '1' means this device has changes that haven't reached Drive yet.
@@ -11,8 +12,18 @@ const SAVE_DELAY_MS = 1500
 
 // Demo rows are for testing only and never go to Drive
 const realOnly = (transactions) => transactions.filter((t) => !t.demo)
-/** JSON of the real transactions only. Used to compare "what we have" with "what Drive has". */
-const serialize = (transactions) => JSON.stringify(realOnly(transactions))
+/** What gets saved: the real transactions and the cyclic rules (never their generated occurrences). */
+const savedPart = (data) => ({ transactions: realOnly(data.transactions), cyclic: data.cyclic })
+/** JSON of the saved part only. Used to compare "what we have" with "what Drive has". */
+const serialize = (data) => JSON.stringify(savedPart(data))
+/** An account with no data, used after sign-out. */
+const EMPTY_DATA = { transactions: [], cyclic: [] }
+
+/** Reads the Drive file's content. Files saved before cyclic rules existed (version 1) have none. */
+const fromPayload = (remote) => ({
+  transactions: Array.isArray(remote?.transactions) ? remote.transactions : [],
+  cyclic: Array.isArray(remote?.cyclic) ? remote.cyclic : [],
+})
 
 /** True when the device has unsaved changes. False if storage is unavailable. */
 const isDirty = () => {
@@ -32,37 +43,40 @@ const setDirty = (value) => {
   }
 }
 
-/** Builds the content of the Drive file: a format version, a save time, and the real transactions. */
-const toPayload = (transactions) => ({
-  version: 1,
+/**
+ * Builds the content of the Drive file: a format version, a save time, the real transactions
+ * and the cyclic rules. Version 2 added `cyclic`.
+ */
+const toPayload = (data) => ({
+  version: 2,
   updatedAt: new Date().toISOString(),
-  transactions: realOnly(transactions),
+  ...savedPart(data),
 })
 
 /**
- * Keeps `transactions` in sync with Budget Tracker/budget-data.json in the user's Google Drive.
+ * Keeps `data` ({ transactions, cyclic }) in sync with Budget Tracker/budget-data.json in the user's Google Drive.
  *
  * status: 'signed-out' | 'connecting' | 'synced' | 'saving' | 'offline' | 'needs-login' | 'error'
  */
-export default function useCloudSync(transactions, setTransactions) {
+export default function useCloudSync(data, setData) {
   // With a stored token we'll reconnect on mount (see the effect below), so start as 'connecting'.
   const [status, setStatus] = useState(auth.hasValidToken() ? 'connecting' : 'signed-out')
   const [user, setUser] = useState(null)
   const [error, setError] = useState(null)
 
   // Refs hold values the async functions need without re-creating them on every render.
-  // Always the newest transactions, even inside an upload that started earlier
-  const latest = useRef(transactions)
+  // Always the newest data, even inside an upload that started earlier
+  const latest = useRef(data)
   // Drive id of budget-data.json; null while not connected (uploads are skipped)
   const fileId = useRef(null)
   // What Drive is known to contain (or, before the first sync, what was loaded from this device)
-  const baseline = useRef(serialize(transactions))
+  const baseline = useRef(serialize(data))
   // Pending delayed upload (see SAVE_DELAY_MS)
   const timer = useRef(null)
   // Makes sure the automatic reconnect runs only once
   const autoConnectTried = useRef(false)
 
-  latest.current = transactions
+  latest.current = data
 
   /**
    * Turns an error into a status, sets it, and returns it:
@@ -83,7 +97,7 @@ export default function useCloudSync(transactions, setTransactions) {
   }, [])
 
   /**
-   * Uploads the current transactions to Drive if they differ from `baseline`.
+   * Uploads the current data to Drive if they differ from `baseline`.
    * Cancels any pending delayed upload first, and does nothing until connected.
    * If the token expired: with `interactive` (only from a click) it opens the sign-in popup,
    * otherwise the status becomes 'needs-login'.
@@ -150,26 +164,26 @@ export default function useCloudSync(transactions, setTransactions) {
         } else if (sameAccount && isDirty()) {
           // The same account is back (e.g. its token expired while offline) with changes it made
           // on this device that never reached Drive: keep everything in the cloud and add only
-          // the device's transactions the cloud doesn't have
+          // the device's transactions and cyclic rules the cloud doesn't have
           fileId.current = file.id
-          const remote = await drive.readData(token, file.id)
-          const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
-          const { merged, addedCount } = mergeTransactions(remoteTx, latest.current)
-          if (addedCount > 0) await drive.updateData(token, file.id, toPayload(merged))
+          const remote = fromPayload(await drive.readData(token, file.id))
+          const tx = mergeTransactions(remote.transactions, latest.current.transactions)
+          const rules = mergeCyclic(remote.cyclic, latest.current.cyclic)
+          const merged = { transactions: tx.merged, cyclic: rules.merged }
+          if (tx.addedCount + rules.addedCount > 0) await drive.updateData(token, file.id, toPayload(merged))
           baseline.current = serialize(merged)
           // Update the ref right away (not only on the next render), so a signOut() that is
-          // waiting on this connect sees the merged list as saved
-          const next = [...merged, ...latest.current.filter((t) => t.demo)]
+          // waiting on this connect sees the merged data as saved
+          const next = { ...merged, transactions: [...merged.transactions, ...latest.current.transactions.filter((t) => t.demo)] }
           latest.current = next
-          setTransactions(next)
+          setData(next)
         } else {
           // New device or another account: the cloud data overrides this device's cache
           fileId.current = file.id
-          const remote = await drive.readData(token, file.id)
-          const remoteTx = Array.isArray(remote?.transactions) ? remote.transactions : []
-          baseline.current = JSON.stringify(remoteTx)
+          const remote = fromPayload(await drive.readData(token, file.id))
+          baseline.current = serialize(remote)
           // Replace local data with Drive's, keeping this device's demo rows
-          setTransactions((prev) => [...remoteTx, ...prev.filter((t) => t.demo)])
+          setData((prev) => ({ ...remote, transactions: [...remote.transactions, ...prev.transactions.filter((t) => t.demo)] }))
         }
         setDirty(false)
         setStatus('synced')
@@ -183,7 +197,7 @@ export default function useCloudSync(transactions, setTransactions) {
         return fail(err)
       }
     },
-    [fail, setTransactions],
+    [fail, setData],
   )
 
   // Reconnect automatically when a still-valid token is stored (e.g. after a page reload)
@@ -195,12 +209,12 @@ export default function useCloudSync(transactions, setTransactions) {
 
   // Every change: mark dirty and schedule an upload
   useEffect(() => {
-    if (serialize(transactions) === baseline.current) return
+    if (serialize(data) === baseline.current) return
     setDirty(true)
     if (!fileId.current) return
     clearTimeout(timer.current)
     timer.current = setTimeout(() => upload(), SAVE_DELAY_MS)
-  }, [transactions, upload])
+  }, [data, upload])
 
   // Flush when the app goes to the background, and retry when the network comes back
   useEffect(() => {
@@ -222,7 +236,7 @@ export default function useCloudSync(transactions, setTransactions) {
   const signInOtherAccount = useCallback(() => connect({ interactive: true, selectAccount: true }), [connect])
 
   /**
-   * Uploads any unsaved transactions, then signs out and clears this device's copy.
+   * Uploads any unsaved changes, then signs out and clears this device's copy.
    * Called from a click, so it may open the sign-in popup when the token has expired.
    * Returns { ok: true } when signed out, or { ok: false, reason } when the changes could not be
    * uploaded (the user stays signed in, so nothing is lost). `reason` is 'offline' for a
@@ -244,13 +258,13 @@ export default function useCloudSync(transactions, setTransactions) {
     clearTimeout(timer.current)
     await auth.signOut()
     fileId.current = null
-    baseline.current = '[]' // matches serialize([]), so the empty list isn't marked dirty
+    baseline.current = serialize(EMPTY_DATA) // so the emptied data isn't marked dirty
     setDirty(false)
     setUser(null)
-    setTransactions([])
+    setData(EMPTY_DATA)
     setStatus('signed-out')
     return { ok: true }
-  }, [upload, connect, setTransactions])
+  }, [upload, connect, setData])
 
   return { status, user, error, signIn, signInOtherAccount, signOut, lastEmail: auth.lastEmail(), hasClientId: auth.hasClientId }
 }
