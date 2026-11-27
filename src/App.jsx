@@ -1,322 +1,93 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  Button,
-  Card,
-  H1,
-  Input,
-  Paragraph,
-  Separator,
-  SizableText,
-  XStack,
-  YStack,
-} from 'tamagui'
-import TrendChart from './TrendChart.jsx'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, H1, ScrollView, XStack, YStack, useMedia } from 'tamagui'
+import LoginScreen from './components/LoginScreen.jsx'
+import Sidebar from './components/Sidebar.jsx'
+import { expandCyclic, firstCyclicMonth } from './cyclic.js'
 import { createDemoTransactions } from './demoData.js'
+import { monthOf, today } from './format.js'
+import CyclicPage from './pages/CyclicPage.jsx'
+import DashboardPage from './pages/DashboardPage.jsx'
+import ProfilePage from './pages/ProfilePage.jsx'
+import { PAGES } from './pages.js'
 import useCloudSync from './useCloudSync.js'
 
-const SYNC_LABELS = {
-  connecting: 'מתחבר ל-Drive…',
-  synced: '✓ נשמר ב-Google Drive',
-  saving: 'שומר…',
-  offline: 'אין חיבור לרשת – השינויים יישמרו כשהחיבור יחזור',
-  'needs-login': 'פג תוקף ההתחברות – השינויים שמורים במכשיר',
-  error: 'שגיאה בשמירה ל-Drive',
-}
-
-function LoginScreen({ sync }) {
-  const busy = sync.status === 'connecting'
-  return (
-    <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" justifyContent="center" padding="$4">
-      <Card width="100%" maxWidth={400} padding="$5" gap="$4" borderWidth={1} borderColor="$border-color">
-        <YStack gap="$1">
-          <H1 size="$9">הכסף שלי</H1>
-          <Paragraph color="$color-10">
-            התחבר עם חשבון Google כדי לשמור את הנתונים בתיקייה "Budget Tracker" ב-Google Drive שלך.
-          </Paragraph>
-        </YStack>
-        {sync.hasClientId ? (
-          <Button theme="accent" disabled={busy} opacity={busy ? 0.6 : 1} onPress={sync.signIn}>
-            {busy ? 'מתחבר…' : sync.lastEmail ? `התחבר בתור ${sync.lastEmail}` : 'התחבר עם Google'}
-          </Button>
-        ) : null}
-        {sync.hasClientId && sync.lastEmail && !busy ? (
-          <Button variant="outlined" onPress={sync.signInOtherAccount}>
-            התחבר עם חשבון אחר
-          </Button>
-        ) : null}
-        {sync.hasClientId ? null : (
-          <Paragraph theme="red" color="$color-10">
-            חסר Client ID של Google. הגדר VITE_GOOGLE_CLIENT_ID בקובץ ‎.env.local והפעל מחדש את השרת.
-          </Paragraph>
-        )}
-        {sync.error && (
-          <Paragraph theme="red" color="$color-10" size="$2">
-            {sync.error}
-          </Paragraph>
-        )}
-      </Card>
-    </YStack>
-  )
-}
-
-// Shown when sign-out is blocked because the unsaved changes could not be uploaded
-const SIGN_OUT_FAILED = {
-  offline: {
-    title: 'אין חיבור לאינטרנט',
-    message:
-      'לא הצלחתי לשמור את השינויים האחרונים ל-Google Drive, ולכן לא התנתקת. השינויים שמורים במכשיר – נסה להתנתק שוב כשהחיבור יחזור.',
-  },
-  'needs-login': {
-    title: 'ההתחברות ל-Google לא הושלמה',
-    message: 'השינויים האחרונים לא נשמרו ל-Drive, ולכן לא התנתקת. נסה שוב.',
-  },
-  error: {
-    title: 'שגיאה בשמירה ל-Drive',
-    message: 'השינויים האחרונים לא נשמרו, ולכן לא התנתקת. נסה שוב.',
-  },
-}
-const NOTIFICATION_DURATION_MS = 8000
-
-/** A notification that pops up at the top of the screen and hides itself after a few seconds. */
-function Notification({ notice, onClose }) {
-  useEffect(() => {
-    const hideTimer = setTimeout(onClose, NOTIFICATION_DURATION_MS)
-    return () => clearTimeout(hideTimer)
-  }, [notice, onClose])
-
-  return (
-    <Card
-      role="alert"
-      theme="red"
-      position="fixed"
-      top="$4"
-      left="$4"
-      right="$4"
-      marginHorizontal="auto"
-      maxWidth={480}
-      zIndex={1000}
-      padding="$4"
-      borderWidth={1}
-      borderColor="$border-color"
-      elevation="$4"
-    >
-      <XStack gap="$3" alignItems="flex-start">
-        <YStack flex={1} gap="$1">
-          <SizableText size="$4" fontWeight="700">
-            {notice.title}
-          </SizableText>
-          <Paragraph size="$3" color="$color-10">
-            {notice.message}
-          </Paragraph>
-        </YStack>
-        <Button size="sm" chromeless onPress={onClose} aria-label="סגור">
-          ✕
-        </Button>
-      </XStack>
-    </Card>
-  )
-}
-
-function SyncBar({ sync }) {
-  const warn = ['offline', 'needs-login', 'error'].includes(sync.status)
-  const [notice, setNotice] = useState(null)
-  const closeNotice = useCallback(() => setNotice(null), [])
-  const onSignOut = async () => {
-    const result = await sync.signOut()
-    if (!result.ok) setNotice(SIGN_OUT_FAILED[result.reason] ?? SIGN_OUT_FAILED.error)
-  }
-  return (
-    <XStack alignItems="center" gap="$2" flexWrap="wrap">
-      {notice && <Notification notice={notice} onClose={closeNotice} />}
-      <SizableText size="$2" flex={1} theme={warn ? 'red' : undefined} color="$color-10">
-        {SYNC_LABELS[sync.status]}
-        {sync.status === 'error' && sync.error ? ` (${sync.error})` : ''}
-        {sync.user?.emailAddress ? ` · ${sync.user.emailAddress}` : ''}
-      </SizableText>
-      {sync.status === 'needs-login' && (
-        <Button size="sm" theme="accent" onPress={sync.signIn}>
-          התחבר מחדש
-        </Button>
-      )}
-      <Button size="sm" variant="outlined" onPress={onSignOut}>
-        התנתק
-      </Button>
-    </XStack>
-  )
-}
-
 const STORAGE_KEY = 'budget-tracker:transactions'
+// Only the cyclic rules are stored; their monthly occurrences are generated when displayed
+const CYCLIC_STORAGE_KEY = 'budget-tracker:cyclic'
 
-const CATEGORIES = {
-  income: ['משכורת', 'עבודה נוספת', 'מתנה', 'אחר'],
-  expense: ['אוכל', 'דיור', 'תחבורה', 'חשבונות', 'בילויים', 'קניות', 'בריאות', 'אחר'],
-}
-
-const money = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' })
-
-const today = () => new Date().toISOString().slice(0, 10)
-const monthOf = (date) => date.slice(0, 7)
-
-function loadTransactions() {
+/** Reads a JSON array from localStorage; [] when missing, unreadable or storage is blocked. */
+function loadList(key) {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    // Demo data is never loaded on startup; it only appears when the user toggles it on
-    return (JSON.parse(stored) ?? []).filter((t) => !t.demo)
+    const list = JSON.parse(localStorage.getItem(key))
+    return Array.isArray(list) ? list : []
   } catch {
     return []
   }
 }
 
-function SummaryCard({ title, amount, theme }) {
-  return (
-    <Card theme={theme} flex={1} minWidth={150} padding="$4" borderWidth={1} borderColor="$border-color">
-      <SizableText size="$3" color="$color-10">
-        {title}
-      </SizableText>
-      <SizableText size="$7" fontWeight="700">
-        {money.format(amount)}
-      </SizableText>
-    </Card>
-  )
+/** This device's copy of the data: { transactions, cyclic }. */
+function loadData() {
+  return {
+    // Demo data is never loaded on startup; it only appears when the user toggles it on
+    transactions: loadList(STORAGE_KEY).filter((t) => !t.demo),
+    cyclic: loadList(CYCLIC_STORAGE_KEY),
+  }
 }
 
-function TransactionForm({ onAdd }) {
-  const [type, setType] = useState('expense')
-  const [amount, setAmount] = useState('')
-  const [description, setDescription] = useState('')
-  const [category, setCategory] = useState(CATEGORIES.expense[0])
-  const [date, setDate] = useState(today())
-
-  const value = Number(amount)
-  const valid = value > 0 && date
-
-  const switchType = (next) => {
-    setType(next)
-    setCategory(CATEGORIES[next][0])
-  }
-
-  const submit = () => {
-    if (!valid) return
-    onAdd({
-      id: crypto.randomUUID(),
-      type,
-      amount: value,
-      description: description.trim(),
-      category,
-      date,
-    })
-    setAmount('')
-    setDescription('')
-  }
-
-  return (
-    <Card padding="$4" gap="$3" borderWidth={1} borderColor="$border-color">
-      <SizableText size="$5" fontWeight="700">
-        תנועה חדשה
-      </SizableText>
-
-      <XStack gap="$2">
-        <Button
-          flex={1}
-          theme={type === 'expense' ? 'red' : undefined}
-          variant={type === 'expense' ? undefined : 'outlined'}
-          onPress={() => switchType('expense')}
-        >
-          הוצאה
-        </Button>
-        <Button
-          flex={1}
-          theme={type === 'income' ? 'green' : undefined}
-          variant={type === 'income' ? undefined : 'outlined'}
-          onPress={() => switchType('income')}
-        >
-          הכנסה
-        </Button>
-      </XStack>
-
-      <XStack gap="$2" flexWrap="wrap">
-        <Input
-          flex={1}
-          minWidth={120}
-          placeholder="סכום ₪"
-          inputMode="decimal"
-          value={amount}
-          onChangeText={(text) => setAmount(text.replace(/[^\d.]/g, ''))}
-        />
-        <Input flex={1} minWidth={140} type="date" value={date} onChangeText={setDate} />
-      </XStack>
-
-      <Input
-        placeholder="תיאור (לא חובה)"
-        value={description}
-        onChangeText={setDescription}
-        onSubmitEditing={submit}
-      />
-
-      <XStack gap="$2" flexWrap="wrap">
-        {CATEGORIES[type].map((c) => (
-          <Button
-            key={c}
-            size="sm"
-            theme={c === category ? 'accent' : undefined}
-            variant={c === category ? undefined : 'outlined'}
-            onPress={() => setCategory(c)}
-          >
-            {c}
-          </Button>
-        ))}
-      </XStack>
-
-      <Button theme="accent" disabled={!valid} opacity={valid ? 1 : 0.5} onPress={submit}>
-        הוסף
-      </Button>
-    </Card>
-  )
-}
-
-function TransactionRow({ tx, onDelete }) {
-  const isIncome = tx.type === 'income'
-  return (
-    <XStack alignItems="center" gap="$3" paddingVertical="$2">
-      <YStack flex={1}>
-        <SizableText fontWeight="600">{tx.description || tx.category}</SizableText>
-        <SizableText size="$2" color="$color-10">
-          {tx.category} · {new Date(tx.date).toLocaleDateString('he-IL')}
-        </SizableText>
-      </YStack>
-      <SizableText theme={isIncome ? 'green' : 'red'} color="$color-10" fontWeight="700">
-        {isIncome ? '+' : '−'}
-        {money.format(tx.amount)}
-      </SizableText>
-      <Button size="sm" variant="outlined" onPress={() => onDelete(tx.id)} aria-label="מחק">
-        ✕
-      </Button>
-    </XStack>
-  )
+/** The page in the URL hash (#profile, #dashboard, …), so a reload stays on the same page. */
+function pageFromHash() {
+  const id = location.hash.slice(1)
+  return PAGES.some((p) => p.id === id) ? id : 'dashboard'
 }
 
 export default function App() {
-  const [transactions, setTransactions] = useState(loadTransactions)
+  const [data, setData] = useState(loadData)
+  const { transactions, cyclic } = data
   const [month, setMonth] = useState(monthOf(today()))
+  const [page, setPage] = useState(pageFromHash)
+  // Phones: the sidebar is a drawer opened from the top bar
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const media = useMedia()
+  const wide = media.md
+
+  /** Updates only the transactions list (`update` receives the previous list). */
+  const setTransactions = (update) => setData((prev) => ({ ...prev, transactions: update(prev.transactions) }))
+  /** Updates only the cyclic rules (`update` receives the previous list). */
+  const setCyclic = (update) => setData((prev) => ({ ...prev, cyclic: update(prev.cyclic) }))
+
+  // The cyclic rules' occurrences are generated here, only for display - they are never stored.
+  // They run from the first rule's start month up to this month, or to the selected month when
+  // the user looks ahead, so a future month already shows its expected fixed incomes and expenses.
+  const currentMonth = monthOf(today())
+  const lastMonth = month > currentMonth ? month : currentMonth
+  const displayedTransactions = useMemo(() => {
+    const from = firstCyclicMonth(cyclic)
+    return from ? [...transactions, ...expandCyclic(cyclic, from, lastMonth)] : transactions
+  }, [transactions, cyclic, lastMonth])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions))
-  }, [transactions])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data.transactions))
+    localStorage.setItem(CYCLIC_STORAGE_KEY, JSON.stringify(data.cyclic))
+  }, [data])
 
-  const monthTx = useMemo(
-    () =>
-      transactions
-        .filter((t) => monthOf(t.date) === month)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [transactions, month],
-  )
+  // Follow the browser's back/forward buttons
+  useEffect(() => {
+    const onHashChange = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
-  const income = monthTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-  const expense = monthTx.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
-  const balance = income - expense
+  const navigate = (id) => {
+    if (location.hash.slice(1) !== id) location.hash = id
+    setPage(id)
+    setDrawerOpen(false)
+  }
 
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
+  const addCyclic = (rule) => setCyclic((prev) => [...prev, rule])
+  const updateCyclic = (rule) => setCyclic((prev) => prev.map((r) => (r.id === rule.id ? rule : r)))
+  const deleteCyclic = (id) => setCyclic((prev) => prev.filter((r) => r.id !== id))
 
   const [hasDemo, setHasDemo] = useState(false)
   const toggleDemo = () => {
@@ -326,64 +97,74 @@ export default function App() {
     setHasDemo(!hasDemo)
   }
 
-  const sync = useCloudSync(transactions, setTransactions)
+  const sync = useCloudSync(data, setData)
   if (sync.status === 'signed-out' || (sync.status === 'connecting' && !sync.user)) {
     return <LoginScreen sync={sync} />
   }
 
+  const content =
+    page === 'profile' ? (
+      <ProfilePage
+        sync={sync}
+        transactionCount={transactions.filter((t) => !t.demo).length}
+        cyclicCount={cyclic.length}
+      />
+    ) : page === 'cyclic' ? (
+      <CyclicPage rules={cyclic} onAdd={addCyclic} onUpdate={updateCyclic} onDelete={deleteCyclic} />
+    ) : (
+      <DashboardPage
+        transactions={displayedTransactions}
+        month={month}
+        onMonthChange={setMonth}
+        onAdd={addTx}
+        onAddCyclic={addCyclic}
+        onDelete={deleteTx}
+        onManageCyclic={() => navigate('cyclic')}
+        hasDemo={hasDemo}
+        onToggleDemo={toggleDemo}
+      />
+    )
+
   return (
-    <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" padding="$4">
-      <YStack width="100%" maxWidth={720} gap="$4">
-        <SyncBar sync={sync} />
-        <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$3">
-          <YStack>
-            <H1 size="$9">הכסף שלי</H1>
-            <Paragraph color="$color-10">מעקב הכנסות והוצאות</Paragraph>
-          </YStack>
-          <Input width={170} type="month" value={month} onChangeText={setMonth} />
-        </XStack>
+    <XStack backgroundColor="$background" height="100vh">
+      {wide && <Sidebar page={page} onNavigate={navigate} sync={sync} />}
 
-        <XStack gap="$3" flexWrap="wrap">
-          <SummaryCard title="הכנסות" amount={income} theme="green" />
-          <SummaryCard title="הוצאות" amount={expense} theme="red" />
-          <SummaryCard title="יתרה" amount={balance} theme={balance < 0 ? 'red' : 'accent'} />
-        </XStack>
-
-        <Card padding="$4" gap="$3" borderWidth={1} borderColor="$border-color">
-          <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$2">
-            <SizableText size="$5" fontWeight="700">
-              מגמה חודשית
-            </SizableText>
-            <Button size="sm" variant="outlined" onPress={toggleDemo}>
-              {hasDemo ? 'הסר נתוני דמה' : 'טען נתוני דמה'}
+      <YStack flex={1} minWidth={0}>
+        {!wide && (
+          <XStack
+            alignItems="center"
+            gap="$2"
+            paddingHorizontal="$3"
+            paddingVertical="$2"
+            borderBottomWidth={1}
+            borderColor="$border-color"
+          >
+            <Button size="sm" chromeless onPress={() => setDrawerOpen(true)} aria-label="פתח תפריט">
+              ☰
             </Button>
+            <H1 size="$6">הכסף שלי</H1>
           </XStack>
-          <TrendChart
-            transactions={transactions}
-            currentMonth={monthOf(today())}
-            selectedMonth={month}
-            onSelectMonth={setMonth}
-          />
-        </Card>
-
-        <TransactionForm onAdd={addTx} />
-
-        <Card padding="$4" borderWidth={1} borderColor="$border-color">
-          <SizableText size="$5" fontWeight="700" marginBottom="$2">
-            תנועות החודש
-          </SizableText>
-          {monthTx.length === 0 ? (
-            <Paragraph color="$color-10">אין עדיין תנועות בחודש הזה.</Paragraph>
-          ) : (
-            monthTx.map((tx, i) => (
-              <YStack key={tx.id}>
-                {i > 0 && <Separator />}
-                <TransactionRow tx={tx} onDelete={deleteTx} />
-              </YStack>
-            ))
-          )}
-        </Card>
+        )}
+        <ScrollView flex={1}>
+          <YStack alignItems="center" padding="$4">
+            <YStack width="100%" maxWidth={760}>
+              {content}
+            </YStack>
+          </YStack>
+        </ScrollView>
       </YStack>
-    </YStack>
+
+      {!wide && drawerOpen && (
+        <XStack position="fixed" top={0} bottom={0} left={0} right={0} zIndex={900}>
+          <Sidebar page={page} onNavigate={navigate} sync={sync} />
+          <YStack
+            flex={1}
+            backgroundColor="rgba(0,0,0,0.4)"
+            onPress={() => setDrawerOpen(false)}
+            aria-label="סגור תפריט"
+          />
+        </XStack>
+      )}
+    </XStack>
   )
 }
