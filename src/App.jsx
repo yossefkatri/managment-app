@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, H1, Input, Paragraph, Separator, SizableText, XStack, YStack } from 'tamagui'
-import TrendChart from './TrendChart.jsx'
+import { useEffect, useState } from 'react'
+import { Button, H1, ScrollView, XStack, YStack, useMedia } from 'tamagui'
 import LoginScreen from './components/LoginScreen.jsx'
-import SummaryCard from './components/SummaryCard.jsx'
-import SyncBar from './components/SyncBar.jsx'
-import TransactionForm from './components/TransactionForm.jsx'
-import TransactionRow from './components/TransactionRow.jsx'
+import Sidebar from './components/Sidebar.jsx'
 import { createDemoTransactions } from './demoData.js'
 import { monthOf, today } from './format.js'
+import DashboardPage from './pages/DashboardPage.jsx'
+import ProfilePage from './pages/ProfilePage.jsx'
+import { PAGES } from './pages.js'
 import useCloudSync from './useCloudSync.js'
 
 const STORAGE_KEY = 'budget-tracker:transactions'
@@ -33,10 +32,21 @@ function loadData() {
   }
 }
 
+/** The page in the URL hash (#profile, #dashboard, …), so a reload stays on the same page. */
+function pageFromHash() {
+  const id = location.hash.slice(1)
+  return PAGES.some((p) => p.id === id) ? id : 'dashboard'
+}
+
 export default function App() {
   const [data, setData] = useState(loadData)
   const { transactions } = data
   const [month, setMonth] = useState(monthOf(today()))
+  const [page, setPage] = useState(pageFromHash)
+  // Phones: the sidebar is a drawer opened from the top bar
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const media = useMedia()
+  const wide = media.md
 
   /** Updates only the transactions list (`update` receives the previous list). */
   const setTransactions = (update) => setData((prev) => ({ ...prev, transactions: update(prev.transactions) }))
@@ -46,17 +56,18 @@ export default function App() {
     localStorage.setItem(CYCLIC_STORAGE_KEY, JSON.stringify(data.cyclic))
   }, [data])
 
-  const monthTx = useMemo(
-    () =>
-      transactions
-        .filter((t) => monthOf(t.date) === month)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [transactions, month],
-  )
+  // Follow the browser's back/forward buttons
+  useEffect(() => {
+    const onHashChange = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
-  const income = monthTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-  const expense = monthTx.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
-  const balance = income - expense
+  const navigate = (id) => {
+    if (location.hash.slice(1) !== id) location.hash = id
+    setPage(id)
+    setDrawerOpen(false)
+  }
 
   const addTx = (tx) => setTransactions((prev) => [...prev, tx])
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id))
@@ -74,59 +85,65 @@ export default function App() {
     return <LoginScreen sync={sync} />
   }
 
+  const content =
+    page === 'profile' ? (
+      <ProfilePage
+        sync={sync}
+        transactionCount={transactions.filter((t) => !t.demo).length}
+        cyclicCount={data.cyclic.length}
+      />
+    ) : (
+      <DashboardPage
+        transactions={transactions}
+        month={month}
+        onMonthChange={setMonth}
+        onAdd={addTx}
+        onDelete={deleteTx}
+        hasDemo={hasDemo}
+        onToggleDemo={toggleDemo}
+      />
+    )
+
   return (
-    <YStack backgroundColor="$background" minHeight="100vh" alignItems="center" padding="$4">
-      <YStack width="100%" maxWidth={720} gap="$4">
-        <SyncBar sync={sync} />
-        <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$3">
-          <YStack>
-            <H1 size="$9">הכסף שלי</H1>
-            <Paragraph color="$color-10">מעקב הכנסות והוצאות</Paragraph>
-          </YStack>
-          <Input width={170} type="month" value={month} onChangeText={setMonth} />
-        </XStack>
+    <XStack backgroundColor="$background" height="100vh">
+      {wide && <Sidebar page={page} onNavigate={navigate} sync={sync} />}
 
-        <XStack gap="$3" flexWrap="wrap">
-          <SummaryCard title="הכנסות" amount={income} theme="green" />
-          <SummaryCard title="הוצאות" amount={expense} theme="red" />
-          <SummaryCard title="יתרה" amount={balance} theme={balance < 0 ? 'red' : 'accent'} />
-        </XStack>
-
-        <Card padding="$4" gap="$3" borderWidth={1} borderColor="$border-color">
-          <XStack justifyContent="space-between" alignItems="center" flexWrap="wrap" gap="$2">
-            <SizableText size="$5" fontWeight="700">
-              מגמה חודשית
-            </SizableText>
-            <Button size="sm" variant="outlined" onPress={toggleDemo}>
-              {hasDemo ? 'הסר נתוני דמה' : 'טען נתוני דמה'}
+      <YStack flex={1} minWidth={0}>
+        {!wide && (
+          <XStack
+            alignItems="center"
+            gap="$2"
+            paddingHorizontal="$3"
+            paddingVertical="$2"
+            borderBottomWidth={1}
+            borderColor="$border-color"
+          >
+            <Button size="sm" chromeless onPress={() => setDrawerOpen(true)} aria-label="פתח תפריט">
+              ☰
             </Button>
+            <H1 size="$6">הכסף שלי</H1>
           </XStack>
-          <TrendChart
-            transactions={transactions}
-            currentMonth={monthOf(today())}
-            selectedMonth={month}
-            onSelectMonth={setMonth}
-          />
-        </Card>
-
-        <TransactionForm onAdd={addTx} />
-
-        <Card padding="$4" borderWidth={1} borderColor="$border-color">
-          <SizableText size="$5" fontWeight="700" marginBottom="$2">
-            תנועות החודש
-          </SizableText>
-          {monthTx.length === 0 ? (
-            <Paragraph color="$color-10">אין עדיין תנועות בחודש הזה.</Paragraph>
-          ) : (
-            monthTx.map((tx, i) => (
-              <YStack key={tx.id}>
-                {i > 0 && <Separator />}
-                <TransactionRow tx={tx} onDelete={deleteTx} />
-              </YStack>
-            ))
-          )}
-        </Card>
+        )}
+        <ScrollView flex={1}>
+          <YStack alignItems="center" padding="$4">
+            <YStack width="100%" maxWidth={760}>
+              {content}
+            </YStack>
+          </YStack>
+        </ScrollView>
       </YStack>
-    </YStack>
+
+      {!wide && drawerOpen && (
+        <XStack position="fixed" top={0} bottom={0} left={0} right={0} zIndex={900}>
+          <Sidebar page={page} onNavigate={navigate} sync={sync} />
+          <YStack
+            flex={1}
+            backgroundColor="rgba(0,0,0,0.4)"
+            onPress={() => setDrawerOpen(false)}
+            aria-label="סגור תפריט"
+          />
+        </XStack>
+      )}
+    </XStack>
   )
 }

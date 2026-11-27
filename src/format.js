@@ -16,3 +16,6 @@ export const monthOf = (date) => date.slice(0, 7)
 const monthLongFormat = new Intl.DateTimeFormat('he-IL', { month: 'long', year: 'numeric' })
 /** 'YYYY-MM' → e.g. "נובמבר 2026". */
 export const monthName = (ym) => monthLongFormat.format(new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, 1))
+
+/** First letter of the user's name (or email), for the avatar circle. */
+export const initialOf = (user) => (user?.displayName || user?.emailAddress || '?').trim().charAt(0).toUpperCase()
